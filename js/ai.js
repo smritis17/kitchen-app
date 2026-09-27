@@ -1,53 +1,52 @@
 // Receipt scanning and recipe import.
-// - With a Claude API key (Settings), receipts and recipe links are read by Claude.
+// - With a free Google Gemini API key (Settings), receipts and recipe links are read by Gemini.
 // - Without one, receipts are read with Tesseract OCR in the browser (free, less accurate).
 import { CATEGORY_IDS } from "./foods.js";
 
-const SDK_URL = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.128.0/+esm";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js";
-const MODEL = "claude-opus-5";
-const KEY_STORAGE = "kitchen-anthropic-key";
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+// Best model first; if its free daily quota runs out, fall back to the lighter one.
+const MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"];
+const KEY_STORAGE = "kitchen-gemini-key";
 
 export const getApiKey = () => { try { return localStorage.getItem(KEY_STORAGE) || ""; } catch { return ""; } };
 export const setApiKey = (k) => { try { k ? localStorage.setItem(KEY_STORAGE, k) : localStorage.removeItem(KEY_STORAGE); } catch {} };
 
-let clientPromise = null;
-let clientKey = null;
-async function getClient() {
-  const key = getApiKey();
-  if (!clientPromise || clientKey !== key) {
-    clientKey = key;
-    clientPromise = import(SDK_URL).then(({ default: Anthropic }) =>
-      new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true }));
+async function callGemini(model, body) {
+  const res = await fetch(`${GEMINI_URL}/${model}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": getApiKey() },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error?.message || `Gemini error ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
-  return clientPromise;
+  const cand = data.candidates?.[0];
+  if (!cand) throw new Error("Gemini couldn't read this. Try again or enter it manually.");
+  const text = (cand.content?.parts || []).filter((p) => p.text && !p.thought).map((p) => p.text).join("");
+  if (!text) throw new Error(cand.finishReason === "SAFETY" ? "Gemini declined to read this." : "Gemini returned nothing. Try again.");
+  return text;
 }
 
-// One request with structured JSON output. Refusals fall back to another model server-side.
-async function askClaude({ content, schema, tools }) {
-  const client = await getClient();
-  const messages = [{ role: "user", content }];
-  for (let turn = 0; turn < 4; turn++) {
-    const res = await client.beta.messages.create({
-      model: MODEL,
-      max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: { effort: "low", format: { type: "json_schema", schema } },
-      ...(tools ? { tools } : {}),
-      messages,
-    });
-    if (res.stop_reason === "refusal") throw new Error("Claude declined to read this. Try again or enter it manually.");
-    if (res.stop_reason === "pause_turn") {
-      // Server tool (web fetch) still running — send the partial turn back to let it continue.
-      messages.push({ role: "assistant", content: res.content });
-      continue;
+// Sends the request, falling back to a lighter model when quota runs out. Returns parsed JSON.
+async function askGemini(body) {
+  let lastErr;
+  for (const model of MODELS) {
+    try {
+      const text = await callGemini(model, body);
+      const json = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1); // tolerate ```json fences
+      return JSON.parse(json);
+    } catch (e) {
+      lastErr = e;
+      if (![429, 404, 503].includes(e.status)) break; // only retry for quota / unavailable model
     }
-    if (res.stop_reason === "max_tokens") throw new Error("Response was cut off. Try a clearer photo.");
-    const text = res.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    return JSON.parse(text);
   }
-  throw new Error("Took too long. Please try again.");
+  if (lastErr.status === 429) throw new Error("Free daily limit reached. Try again tomorrow");
+  if (lastErr.status === 400 && /api key/i.test(lastErr.message)) throw new Error("Your Gemini API key isn't valid. Check it in ⚙️ Settings");
+  throw lastErr;
 }
 
 // ---------- images ----------
@@ -74,24 +73,22 @@ export function resizeImage(file, maxSide = 1000, quality = 0.8) {
 // ---------- receipts ----------
 
 const RECEIPT_SCHEMA = {
-  type: "object",
+  type: "OBJECT",
   properties: {
     items: {
-      type: "array",
+      type: "ARRAY",
       items: {
-        type: "object",
+        type: "OBJECT",
         properties: {
-          name: { type: "string" },
-          quantity: { type: "integer" },
-          category: { type: "string", enum: CATEGORY_IDS },
+          name: { type: "STRING" },
+          quantity: { type: "INTEGER" },
+          category: { type: "STRING", enum: CATEGORY_IDS },
         },
         required: ["name", "quantity", "category"],
-        additionalProperties: false,
       },
     },
   },
   required: ["items"],
-  additionalProperties: false,
 };
 
 const RECEIPT_PROMPT = `This is a photo of a grocery store receipt. List every product that was purchased.
@@ -104,16 +101,18 @@ const RECEIPT_PROMPT = `This is a photo of a grocery store receipt. List every p
 
 export async function scanReceipt(file, onProgress) {
   if (getApiKey()) {
-    onProgress?.("Reading receipt with Claude…");
+    onProgress?.("Reading receipt with Gemini…");
     const dataUrl = await resizeImage(file, 2000, 0.85);
-    const { items } = await askClaude({
-      schema: RECEIPT_SCHEMA,
-      content: [
-        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: dataUrl.split(",")[1] } },
-        { type: "text", text: RECEIPT_PROMPT },
-      ],
+    const { items } = await askGemini({
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: "image/jpeg", data: dataUrl.split(",")[1] } },
+          { text: RECEIPT_PROMPT },
+        ],
+      }],
+      generationConfig: { responseMimeType: "application/json", responseSchema: RECEIPT_SCHEMA },
     });
-    return items;
+    return items || [];
   }
   return ocrReceipt(file, onProgress);
 }
@@ -164,31 +163,22 @@ async function ocrReceipt(file, onProgress) {
 
 // ---------- recipe import from a link ----------
 
-const RECIPE_SCHEMA = {
-  type: "object",
-  properties: {
-    title: { type: "string" },
-    cuisine: { type: "string" },
-    time: { type: "string" },
-    servings: { type: "string" },
-    image_url: { type: "string" },
-    ingredients: { type: "array", items: { type: "string" } },
-    steps: { type: "array", items: { type: "string" } },
-  },
-  required: ["title", "cuisine", "time", "servings", "image_url", "ingredients", "steps"],
-  additionalProperties: false,
-};
-
 export async function importRecipe(url, cuisines) {
-  return askClaude({
-    schema: RECIPE_SCHEMA,
-    tools: [{ type: "web_fetch_20260209", name: "web_fetch", max_uses: 3 }],
-    content: `Fetch this recipe page and extract the recipe: ${url}
+  // URL context (reading the page) can't be combined with JSON mode, so the JSON shape is in the prompt.
+  const r = await askGemini({
+    contents: [{ parts: [{ text: `Read this recipe page and extract the recipe: ${url}
+
+Reply with only a JSON object, no other text, in exactly this shape:
+{"title": "", "cuisine": "", "time": "", "servings": "", "image_url": "", "ingredients": [""], "steps": [""]}
 
 - cuisine: pick the best fit from ${cuisines.join(", ")} (or another single word if none fit).
 - time: total time, short (e.g. "35 min"); "" if not given. servings: e.g. "4"; "" if not given.
 - image_url: the main photo of the finished dish (og:image is ideal), as an absolute URL; "" if none.
 - ingredients: one string per ingredient exactly as written with amounts (e.g. "2 cups basmati rice"). Append " (optional)" to optional ones.
-- steps: the instructions, one string per step, without step numbers.`,
+- steps: the instructions, one string per step, without step numbers.
+- If the page can't be read or isn't a recipe, return {"title": ""}.` }] }],
+    tools: [{ url_context: {} }],
   });
+  if (!r.title) throw new Error("Couldn't find a recipe on that page");
+  return r;
 }

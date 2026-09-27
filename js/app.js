@@ -483,7 +483,7 @@ function receiptSheet() {
           <b>Take a photo or choose one</b>
           <small>Lay the receipt flat in good light</small>
         </label>
-        <p class="hint">${aiOn ? "✨ Using Claude for accurate reading." : "Using on-device scanning (free, but reads abbreviations literally). For much better results, add a Claude API key in ⚙️ Settings."}</p>
+        <p class="hint">${aiOn ? "✨ Using Gemini for accurate reading." : "Using on-device scanning (free, but reads abbreviations literally). For much better results, add a free Gemini API key in ⚙️ Settings."}</p>
       </div>
     </div>`, (root) => {
     $("#receiptFile", root).onchange = async (e) => {
@@ -694,7 +694,7 @@ function recipeFormSheet(recipe) {
       <div id="linkFields">
         <label>Recipe link <input name="sourceUrl" type="url" inputmode="url" placeholder="https://…" value="${esc(r.sourceUrl)}"></label>
         ${aiOn ? `<button type="button" class="btn" id="autofill">✨ Auto-fill from link</button><p class="hint" id="autofillStatus"></p>`
-          : `<p class="hint">Paste the ingredients and steps below. (Add a Claude API key in ⚙️ Settings to auto-fill from links.)</p>`}
+          : `<p class="hint">Paste the ingredients and steps below. (Add a free Gemini API key in ⚙️ Settings to auto-fill from links.)</p>`}
       </div>
       <label>Name <input name="title" required value="${esc(r.title)}" placeholder="e.g. Chana masala"></label>
       <div class="row">
@@ -795,10 +795,10 @@ function settingsSheet() {
       ${store.mode === "cloud"
         ? store.user ? `<p>☁️ Synced across your devices as <b>${esc(store.user.email)}</b>.</p><button class="btn" id="signOut">Sign out</button>` : `<p>Not signed in.</p>`
         : `<p>📱 Saved on this device only. Add your Firebase settings to <code>js/config.js</code> to sync between devices (see README).</p>`}
-      <h3>Claude API key <small>(optional)</small></h3>
-      <p class="hint">Makes receipt scanning much more accurate and lets you auto-fill recipes from a link. Stored only in this browser, never synced or uploaded. Each scan costs a few cents on your Anthropic account. Get a key at console.anthropic.com.</p>
+      <h3>Gemini API key <small>(optional, free)</small></h3>
+      <p class="hint">Makes receipt scanning much more accurate and lets you auto-fill recipes from a link. Get a free key at aistudio.google.com/apikey (sign in with Google → Create API key). Stored only in this browser, never synced. Note: on the free tier Google may use what you send to improve its products.</p>
       <div class="row">
-        <input id="apiKey" type="password" placeholder="sk-ant-…" value="${esc(key)}" autocomplete="off">
+        <input id="apiKey" type="password" placeholder="AIza…" value="${esc(key)}" autocomplete="off">
         <button class="btn primary" id="saveKey">Save</button>
       </div>
       ${key ? `<button class="link-btn" id="removeKey">Remove key</button>` : ""}
@@ -872,6 +872,8 @@ function bindAuth() {
 }
 
 // ---------- start ----------
+
+try { localStorage.removeItem("kitchen-anthropic-key"); } catch {} // from the earlier Claude version
 
 store.subscribe(render);
 render();

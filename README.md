@@ -25,15 +25,20 @@ Until this is set up, data is saved only in the browser you're using.
 7. Commit & push. Open the app, **create an account**, and sign in with the same email on every device.
 8. Optional: after creating your account, **Authentication → Settings → User actions** → untick *Enable create (sign-up)* so nobody else can make accounts.
 
-## Better receipt scanning & recipe links (optional)
+## Better receipt scanning & recipe links (optional, free)
 
 Without a key, receipts are read by free on-device OCR (it reads store abbreviations literally, e.g. "GV WHL MLK").
-With a **Claude API key** (from <https://console.anthropic.com>), paste it in ⚙️ Settings inside the app:
+With a free **Google Gemini API key**, paste it in ⚙️ Settings inside the app:
+
+1. Go to <https://aistudio.google.com/apikey> and sign in with a Google account.
+2. **Create API key** → copy it (starts with `AIza`). No credit card needed.
+
+Then:
 
 - Receipts are read accurately, with abbreviations expanded ("Whole milk").
 - **✨ Auto-fill from link** pulls the title, ingredients, steps and photo from a recipe web page.
 
-The key is stored only in that browser. It is not synced and not in this repo. Each scan costs a few cents.
+The key is stored only in that browser. It is not synced and not in this repo. The free tier has a daily request limit (plenty for home use). If the main model's quota runs out, the app falls back to a lighter one. On the free tier, Google may use what you send to improve its products.
 
 ## Run locally
 
