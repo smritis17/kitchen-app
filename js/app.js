@@ -1,7 +1,7 @@
 import { store, initStore, newId } from "./store.js";
 import {
   CATEGORIES, LOCATIONS, CUISINES, categoryById, cuisineEmoji, guessEmoji, guessCategory,
-  guessMode, guessLocation, makeMatcher, isOptional, coreTokens,
+  guessMode, guessLocation, makeMatcher, isOptional, coreTokens, sameFood,
 } from "./foods.js";
 import { scanReceipt, importRecipe, resizeImage, getApiKey, setApiKey } from "./ai.js";
 
@@ -10,7 +10,7 @@ import { scanReceipt, importRecipe, resizeImage, getApiKey, setApiKey } from "./
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const sameName = (a, b) => coreTokens(a).join(" ") === coreTokens(b).join(" ");
+const sameName = sameFood; // "Scallions" and "Green onions" count as the same item
 const today = () => new Date(new Date().toDateString());
 const daysUntil = (iso) => Math.round((new Date(iso + "T00:00") - today()) / 86400000);
 const isoPlus = (days) => { const d = today(); d.setDate(d.getDate() + days); return d.toLocaleDateString("en-CA"); };
@@ -633,7 +633,8 @@ function recipesClick(e) {
 function recipeDetailSheet(id) {
   const a = analyzeRecipes().find((x) => x.r.id === id); if (!a) return;
   const { r, ings, missing } = a;
-  const notListed = missing.filter((m) => !store.state.groceries.some((g) => !g.checked && coreTokens(g.name).every((w) => coreTokens(m.text).includes(w))));
+  const onList = makeMatcher(store.state.groceries.filter((g) => !g.checked).map((g) => g.name));
+  const notListed = missing.filter((m) => !onList(m.text));
   openSheet(`
     <div class="recipe-detail">
       <div class="detail-cover">
