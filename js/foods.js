@@ -146,14 +146,20 @@ export function coreTokens(text) {
     .map(singular);
 }
 
+// Plain water (hot, cold, boiling…) and ice are always on hand. "Coconut water" etc. still count.
+const WATER_WORDS = new Set(["water", "ice", "cube", "hot", "warm", "cold", "boiling", "lukewarm", "tap", "filtered", "iced", "chilled"]);
+const isPlainWater = (t) => t.some((w) => w === "water" || w === "ice") && t.every((w) => WATER_WORDS.has(w));
+
 // True when any pantry item covers the ingredient (either side's key words contain the other's).
 export function makeMatcher(pantryNames) {
   const pantry = pantryNames.map(coreTokens).filter((t) => t.length);
-  return (ingredientText) => {
-    const t = coreTokens(ingredientText);
-    if (!t.length) return true;
+  const matches = (text) => {
+    const t = coreTokens(text);
+    if (!t.length || isPlainWater(t)) return true;
     return pantry.some((p) => p.every((w) => t.includes(w)) || t.every((w) => p.includes(w)));
   };
+  // "Butter or ghee", "water or broth": having any one of the options is enough.
+  return (ingredientText) => (ingredientText || "").split(/\s+or\s+/i).some(matches);
 }
 
 export const isOptional = (text) => /\boptional\b/i.test(text || "");
