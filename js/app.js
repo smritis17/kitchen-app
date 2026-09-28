@@ -20,7 +20,7 @@ const save = (p) => p.catch((e) => showToast(`Couldn't save: ${e.message}`)); //
 const prefs = (() => { try { return JSON.parse(localStorage.getItem("kitchen-prefs")) || {}; } catch { return {}; } })();
 const savePrefs = () => { try { localStorage.setItem("kitchen-prefs", JSON.stringify(prefs)); } catch {} };
 
-const ui = { tab: prefs.tab || "fridge", loc: "all", filter: null, search: "", cuisine: "All" };
+const ui = { tab: prefs.tab || "fridge", loc: "all", filter: null, search: "", cuisine: "All", week: 0 };
 
 // Level steps for "amount left" items (milk, rice…), as percent.
 const LEVELS = [0, 10, 25, 50, 75, 100];
@@ -78,7 +78,7 @@ const categoryOptions = (sel) => CATEGORIES.map((c) => `<option value="${c.id}" 
 
 // ---------- rendering ----------
 
-const TITLES = { fridge: "Fridge & Pantry", groceries: "Groceries", recipes: "Recipes" };
+const TITLES = { fridge: "Fridge & Pantry", groceries: "Groceries", plan: "Meal Plan", recipes: "Recipes" };
 
 function render() {
   const view = $("#view");
@@ -86,6 +86,7 @@ function render() {
   document.body.classList.toggle("auth-mode", needsAuth);
   $$(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === ui.tab));
   $("#title").textContent = needsAuth ? "Kitchen" : TITLES[ui.tab];
+  document.body.classList.toggle("no-fab", ui.tab === "plan");
   $("#topActions").innerHTML = "";
   if (needsAuth) { view.innerHTML = authView(); bindAuth(); return; }
   if (!store.ready) { view.innerHTML = `<div class="empty"><div class="spinner"></div><p>Loading your kitchen…</p></div>`; return; }
@@ -95,7 +96,7 @@ function render() {
   const focused = active?.id;
   const value = active?.value;
   const caret = active?.selectionStart;
-  view.innerHTML = { fridge: fridgeView, groceries: groceriesView, recipes: recipesView }[ui.tab]();
+  view.innerHTML = { fridge: fridgeView, groceries: groceriesView, plan: planView, recipes: recipesView }[ui.tab]();
   const el = focused && $(`#${focused}`, view);
   if (el) {
     if (value != null) el.value = value;
@@ -193,6 +194,7 @@ $("#view").addEventListener("click", (e) => {
     }
   }
   if (ui.tab === "groceries") return groceriesClick(e);
+  if (ui.tab === "plan") return planClick(e);
   if (ui.tab === "recipes") return recipesClick(e);
 });
 $("#view").addEventListener("input", (e) => {
@@ -783,6 +785,238 @@ function recipeFormSheet(recipe) {
 }
 
 // ======================================================================
+// MEAL PLAN
+// ======================================================================
+
+const MEALS = [
+  { id: "breakfast", label: "Breakfast", emoji: "🌅" },
+  { id: "lunch", label: "Lunch", emoji: "🥪" },
+  { id: "dinner", label: "Dinner", emoji: "🍲" },
+];
+const isoDate = (d) => d.toLocaleDateString("en-CA");
+const slotId = (date, meal) => `${date}_${meal}`;
+
+// The 7 dates (Sun–Sat) of the week `offset` weeks from this one. Weeks start Sunday, the usual prep day.
+function weekDates(offset = 0) {
+  const d = today();
+  d.setDate(d.getDate() - d.getDay() + offset * 7);
+  return Array.from({ length: 7 }, (_, i) => { const x = new Date(d); x.setDate(d.getDate() + i); return x; });
+}
+const fmtDay = (d, opts) => d.toLocaleDateString(undefined, opts);
+
+function planSlots(dates) {
+  const set = new Set(dates.map(isoDate));
+  return store.state.plan.filter((p) => set.has(p.date));
+}
+// A slot counts as filled if it has text or points to a recipe that still exists.
+const slotFilled = (p, recipes) => p && (p.text || recipes.has(p.recipeId));
+
+function planView() {
+  const dates = weekDates(ui.week);
+  const analysis = new Map(analyzeRecipes().map((a) => [a.r.id, a]));
+  const slots = new Map(planSlots(dates).map((p) => [slotId(p.date, p.meal), p]));
+  const todayIso = isoDate(today());
+  const label = ui.week === 0 ? "This week" : ui.week === 1 ? "Next week" : ui.week === -1 ? "Last week" : fmtDay(dates[0], { month: "long", day: "numeric" });
+  const range = `${fmtDay(dates[0], { month: "short", day: "numeric" })} – ${fmtDay(dates[6], { month: "short", day: "numeric" })}`;
+
+  // Prep list: each planned recipe and how many meals it covers.
+  const prep = new Map();
+  for (const p of slots.values()) {
+    if (!p.text && analysis.has(p.recipeId)) prep.set(p.recipeId, (prep.get(p.recipeId) || 0) + 1);
+  }
+  const filled = [...slots.values()].filter((p) => slotFilled(p, analysis)).length;
+  const toBuy = weekShoppingList(dates).length;
+
+  return `
+    <div class="week-nav">
+      <button class="icon-btn" data-p="prev" aria-label="Previous week">‹</button>
+      <div><b>${label}</b><small>${range} · ${filled}/21 meals planned</small></div>
+      <button class="icon-btn" data-p="next" aria-label="Next week">›</button>
+    </div>
+    <div class="chips">
+      <button class="chip" data-p="fill">✨ Fill empty slots</button>
+      <button class="chip" data-p="copy">🔁 Copy last week</button>
+      ${filled ? `<button class="chip" data-p="clear">Clear week</button>` : ""}
+    </div>
+    ${prep.size ? `
+      <section class="group prep">
+        <h2>🍳 Prep list <span class="count">${prep.size} recipe${prep.size > 1 ? "s" : ""}</span></h2>
+        <ul class="checklist">
+          ${[...prep].sort((a, b) => b[1] - a[1]).map(([id, n]) => {
+            const a = analysis.get(id);
+            return `<li class="check-row"><button class="check-text" data-p="recipe" data-id="${id}">
+              <span class="row-emoji">${cuisineEmoji(a.r.cuisine)}</span>${esc(a.r.title)} <small>× ${n} meal${n > 1 ? "s" : ""}</small>
+              <span class="spacer"></span>${a.missing.length ? `<span class="badge ${a.missing.length <= 2 ? "warn" : "bad"}">Need ${a.missing.length}</span>` : `<span class="badge good">✓</span>`}
+            </button></li>`;
+          }).join("")}
+        </ul>
+        ${toBuy ? `<button class="btn primary wide" data-p="shop">🛒 Add ${toBuy} missing ingredient${toBuy > 1 ? "s" : ""} to groceries</button>`
+          : `<p class="hint">✓ You have everything for this week's recipes (or it's already on your list).</p>`}
+      </section>` : ""}
+    ${dates.map((d) => {
+      const iso = isoDate(d);
+      return `
+      <section class="day ${iso === todayIso ? "today" : ""} ${iso < todayIso ? "past" : ""}">
+        <h3>${fmtDay(d, { weekday: "long" })} <small>${fmtDay(d, { month: "short", day: "numeric" })}${iso === todayIso ? " · Today" : ""}</small></h3>
+        ${MEALS.map((m) => planSlot(iso, m, slots.get(slotId(iso, m.id)), analysis)).join("")}
+      </section>`;
+    }).join("")}
+    ${store.state.recipes.length ? "" : `<p class="hint center">Tip: add recipes on the Recipes tab to plan with them. You can also type any meal, like "Leftovers".</p>`}`;
+}
+
+function planSlot(date, meal, p, analysis) {
+  const a = p && !p.text && analysis.get(p.recipeId);
+  let body;
+  if (a) {
+    const thumb = a.r.photo ? `<img src="${esc(a.r.photo)}" alt="" loading="lazy">` : cuisineEmoji(a.r.cuisine);
+    body = `<span class="slot-thumb">${thumb}</span><span class="slot-title">${esc(a.r.title)}</span>
+      ${a.missing.length ? `<span class="badge ${a.missing.length <= 2 ? "warn" : "bad"}">Need ${a.missing.length}</span>` : ""}`;
+  } else if (p?.text) {
+    body = `<span class="slot-thumb">📝</span><span class="slot-title">${esc(p.text)}</span>`;
+  } else {
+    body = `<span class="slot-empty">＋ Add ${meal.label.toLowerCase()}</span>`;
+  }
+  return `<button class="slot" data-p="slot" data-date="${date}" data-meal="${meal.id}">
+    <span class="slot-meal">${meal.emoji} ${meal.label}</span>${body}</button>`;
+}
+
+function planClick(e) {
+  const b = e.target.closest("[data-p]"); if (!b) return;
+  const dates = weekDates(ui.week);
+  switch (b.dataset.p) {
+    case "prev": ui.week--; return render();
+    case "next": ui.week++; return render();
+    case "slot": return slotSheet(b.dataset.date, b.dataset.meal);
+    case "recipe": return recipeDetailSheet(b.dataset.id);
+    case "fill": return fillWeek(dates);
+    case "copy": return copyLastWeek(dates);
+    case "shop": {
+      const items = weekShoppingList(dates);
+      items.forEach((name) => addGrocery(name));
+      return showToast(`Added ${items.length} to your grocery list 🛒`, [{ label: "View", fn: () => $('[data-tab="groceries"]').click() }]);
+    }
+    case "clear": {
+      const old = planSlots(dates);
+      old.forEach((p) => save(store.remove("plan", p.id)));
+      return showToast("Week cleared", [{ label: "Undo", fn: () => save(store.addMany("plan", old)) }]);
+    }
+  }
+}
+
+// Missing ingredients across the week's recipes, deduped, minus anything already on the list.
+function weekShoppingList(dates) {
+  const analysis = new Map(analyzeRecipes().map((a) => [a.r.id, a]));
+  const names = new Map();
+  for (const p of planSlots(dates)) {
+    const a = !p.text && analysis.get(p.recipeId);
+    if (!a) continue;
+    for (const m of a.missing) {
+      const name = cleanIngredient(m.text);
+      names.set(name.toLowerCase(), name);
+    }
+  }
+  return [...names.values()].filter((n) => !store.state.groceries.some((g) => !g.checked && sameName(g.name, n)));
+}
+
+function setSlot(date, meal, data) {
+  const id = slotId(date, meal);
+  const prev = store.state.plan.find((p) => p.id === id);
+  if (!data) return prev && save(store.remove("plan", id));
+  save(store.add("plan", { id, date, meal, recipeId: "", text: "", ...data }));
+}
+
+// Fill empty slots (today onward) with the recipes you're closest to being able to make.
+// Breakfast uses recipes in the "Breakfast" cuisine; lunch and dinner use everything else.
+function fillWeek(dates) {
+  const analysis = new Map(analyzeRecipes().map((a) => [a.r.id, a]));
+  const ranked = [...analysis.values()].sort(byMissing);
+  const isBreakfast = (a) => /breakfast|brunch/i.test(a.r.cuisine || "");
+  const pools = {
+    breakfast: ranked.filter(isBreakfast),
+    lunch: ranked.filter((a) => !isBreakfast(a) && !/dessert/i.test(a.r.cuisine || "")),
+  };
+  pools.dinner = pools.lunch;
+  if (!pools.lunch.length && !pools.breakfast.length) return showToast("Add some recipes first, then I can fill your week");
+  const slots = new Map(planSlots(dates).map((p) => [slotId(p.date, p.meal), p]));
+  const todayIso = isoDate(today());
+  const turn = { breakfast: 0, main: 0 }; // lunch and dinner share a counter so they alternate dishes
+  const added = [];
+  for (const d of dates) {
+    const iso = isoDate(d);
+    if (iso < todayIso) continue;
+    for (const m of MEALS) {
+      const pool = pools[m.id];
+      if (!pool.length || slotFilled(slots.get(slotId(iso, m.id)), analysis)) continue;
+      const key = m.id === "breakfast" ? "breakfast" : "main";
+      const a = pool[turn[key]++ % Math.min(pool.length, 5)]; // rotate through the 5 easiest to make
+      const slot = { id: slotId(iso, m.id), date: iso, meal: m.id, recipeId: a.r.id, text: "" };
+      added.push(slot);
+    }
+  }
+  if (!added.length) return showToast("Nothing to fill; the rest of the week is planned");
+  save(store.addMany("plan", added));
+  showToast(`Planned ${added.length} meals ✨`, [{ label: "Undo", fn: () => added.forEach((s) => save(store.remove("plan", s.id))) }], 7000);
+}
+
+function copyLastWeek(dates) {
+  const prevDates = dates.map((d) => { const x = new Date(d); x.setDate(x.getDate() - 7); return x; });
+  const recipes = new Set(store.state.recipes.map((r) => r.id));
+  const current = new Map(planSlots(dates).map((p) => [slotId(p.date, p.meal), p]));
+  const added = [];
+  for (const p of planSlots(prevDates)) {
+    const d = new Date(p.date + "T00:00"); d.setDate(d.getDate() + 7);
+    const iso = isoDate(d);
+    if (slotFilled(current.get(slotId(iso, p.meal)), recipes) || !slotFilled(p, recipes)) continue;
+    added.push({ id: slotId(iso, p.meal), date: iso, meal: p.meal, recipeId: p.recipeId || "", text: p.text || "" });
+  }
+  if (!added.length) return showToast("Nothing to copy from the week before");
+  save(store.addMany("plan", added));
+  showToast(`Copied ${added.length} meals`, [{ label: "Undo", fn: () => added.forEach((s) => save(store.remove("plan", s.id))) }], 7000);
+}
+
+function slotSheet(date, mealId) {
+  const meal = MEALS.find((m) => m.id === mealId);
+  const d = new Date(date + "T00:00");
+  const current = store.state.plan.find((p) => p.id === slotId(date, mealId));
+  const all = analyzeRecipes();
+  const inWeek = new Set(planSlots(weekDates(ui.week)).map((p) => p.recipeId).filter(Boolean));
+  // Breakfast recipes first for breakfast (last otherwise); then recipes already in this week's prep
+  // (cook once, eat twice); then the easiest to make.
+  const isBreakfast = (a) => /breakfast|brunch/i.test(a.r.cuisine || "");
+  const score = (a) => (mealId === "breakfast" ? (isBreakfast(a) ? 0 : 2) : isBreakfast(a) ? 3 : 2) - (inWeek.has(a.r.id) ? 1 : 0);
+  const list = all.sort((a, b) => score(a) - score(b) || byMissing(a, b));
+  const row = (a) => `
+    <li><button class="pick" data-id="${a.r.id}">
+      <span class="slot-thumb">${a.r.photo ? `<img src="${esc(a.r.photo)}" alt="" loading="lazy">` : cuisineEmoji(a.r.cuisine)}</span>
+      <span class="pick-text"><b>${esc(a.r.title)}</b><small>${esc(a.r.cuisine || "Other")}${inWeek.has(a.r.id) ? " · already this week" : ""}</small></span>
+      ${a.missing.length ? `<span class="badge ${a.missing.length <= 2 ? "warn" : "bad"}">Need ${a.missing.length}</span>` : `<span class="badge good">✓ Ready</span>`}
+    </button></li>`;
+  openSheet(`
+    <div class="form">
+      <div class="sheet-head"><h2>${meal.emoji} ${meal.label} · ${fmtDay(d, { weekday: "short", month: "short", day: "numeric" })}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+      <form class="row" id="slotText">
+        <input name="text" placeholder="Type a meal… e.g. Leftovers, Eat out" value="${esc(current?.text || "")}" autocomplete="off">
+        <button class="btn" type="submit">Set</button>
+      </form>
+      <div class="chips">${["Leftovers", "Eat out", "Skip"].map((t) => `<button class="chip" data-text="${t}">${t}</button>`).join("")}</div>
+      ${list.length ? `
+        <input class="search" id="slotSearch" type="search" placeholder="Search recipes…">
+        <ul class="pick-list" id="pickList">${list.map(row).join("")}</ul>` : `<p class="hint">No recipes yet. Add some on the Recipes tab.</p>`}
+      ${current ? `<button class="btn danger" id="clearSlot">Remove from plan</button>` : ""}
+    </div>`, (root) => {
+    const choose = (data) => { setSlot(date, mealId, data); closeSheet(); };
+    $("#slotText", root).onsubmit = (e) => { e.preventDefault(); const t = e.target.text.value.trim(); if (t) choose({ text: t }); };
+    $$("[data-text]", root).forEach((b) => (b.onclick = () => choose({ text: b.dataset.text })));
+    $("#pickList", root)?.addEventListener("click", (e) => { const b = e.target.closest(".pick"); if (b) choose({ recipeId: b.dataset.id }); });
+    $("#slotSearch", root)?.addEventListener("input", (e) => {
+      const q = e.target.value.toLowerCase();
+      $$(".pick-list li", root).forEach((li) => (li.hidden = !li.textContent.toLowerCase().includes(q)));
+    });
+    $("#clearSlot", root)?.addEventListener("click", () => choose(null));
+  });
+}
+
+// ======================================================================
 // SETTINGS & AUTH
 // ======================================================================
 
@@ -821,7 +1055,7 @@ function settingsSheet() {
       const status = $("#importStatus", root);
       try {
         const data = JSON.parse(await e.target.files[0].text());
-        if (!["fridge", "groceries", "recipes"].some((c) => Array.isArray(data[c]))) throw new Error("Not a kitchen backup file");
+        if (!["fridge", "groceries", "recipes", "plan"].some((c) => Array.isArray(data[c]))) throw new Error("Not a kitchen backup file");
         status.textContent = "Importing…";
         await store.replaceAll(data);
         closeSheet(); showToast("Backup restored");

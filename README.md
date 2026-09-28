@@ -4,6 +4,7 @@ A phone-friendly web app for your kitchen:
 
 - **Fridge & Pantry**: everything you have, grouped by type, with counts (🍅🍅🍅 ×3) or fill gauges (milk: half). Tap −/＋ as you use things; when something runs out it offers to add it to your grocery list.
 - **Groceries**: your shopping list, grouped by aisle. Check items off in the store, then **Put away** moves them into the fridge/pantry. **Scan a receipt** reads a photo and adds the items.
+- **Plan**: a Sunday–Saturday week with breakfast, lunch and dinner slots. Pick a recipe or type anything ("Leftovers", "Eat out"). **✨ Fill empty slots** plans the rest of the week with the recipes you're closest to making (recipes with cuisine "Breakfast" go in breakfast slots). **Copy last week** repeats a routine. The **Prep list** shows what to cook and how many meals each covers, and adds everything you're missing to your grocery list in one tap.
 - **Recipes**: cards with photos, grouped by cuisine and sorted by **fewest ingredients you'd need to buy**. Add your own or paste a link. Add "(optional)" to an ingredient line to leave it out of the sorting.
 
 No build step. It's plain HTML/CSS/JS hosted on GitHub Pages.

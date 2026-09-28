@@ -3,14 +3,14 @@
 import { firebaseConfig } from "./config.js";
 
 const FB = "https://www.gstatic.com/firebasejs/12.19.0";
-const COLLECTIONS = ["fridge", "groceries", "recipes"];
+const COLLECTIONS = ["fridge", "groceries", "recipes", "plan"];
 const LOCAL_KEY = "kitchen-data-v1";
 
 export const newId = () =>
   (crypto.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/-/g, "");
 
 const listeners = new Set();
-const state = { fridge: [], groceries: [], recipes: [] };
+const state = { fridge: [], groceries: [], recipes: [], plan: [] };
 
 export const store = {
   state,
